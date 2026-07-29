@@ -1,8 +1,8 @@
 name: Release
 
 # 推送 tag（如 v1.0.0）时自动构建插件并发布 GitHub Release
-# 同时把 main.js / manifest.json / styles.css 作为 release assets 上传，
-# 用户可直接下载这三个文件放入 .obsidian/plugins/beeimg-uploader/ 安装
+# 把 main.js / manifest.json / styles.css 打包成一个 zip 上传，
+# 用户下载 zip 解压到 .obsidian/plugins/beeimg-uploader/ 即可安装
 on:
   push:
     tags:
@@ -44,6 +44,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Manifest version: $version"
 
+      - name: Package into zip
+        run: |
+          zip_name="beeimg-uploader-${{ steps.manifest.outputs.version }}.zip"
+          zip -j "$zip_name" main.js manifest.json styles.css
+          echo "zip_name=$zip_name" >> "$GITHUB_ENV"
+          ls -la "$zip_name"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -53,10 +60,11 @@ jobs:
 
             ## 安装
 
-            1. 下载下方三个文件：`main.js`、`manifest.json`、`styles.css`
-            2. 在你的 Obsidian vault 中创建目录 `.obsidian/plugins/beeimg-uploader/`
-            3. 把三个文件放入该目录
-            4. Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 启用「BeeImg 蜜蜂图床上传」
+            1. 下载下方的 `beeimg-uploader-${{ steps.manifest.outputs.version }}.zip`
+            2. 解压得到 `main.js`、`manifest.json`、`styles.css` 三个文件
+            3. 在你的 Obsidian vault 中创建目录 `.obsidian/plugins/beeimg-uploader/`
+            4. 把三个文件放入该目录
+            5. Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 启用「BeeImg 蜜蜂图床上传」
 
             ## 配置
 
@@ -66,8 +74,6 @@ jobs:
 
             见 [DEV_NOTES](https://github.com/${{ github.repository }}/blob/main/DEV_NOTES.md)
           files: |
-            main.js
-            manifest.json
-            styles.css
+            ${{ env.zip_name }}
           draft: false
           prerelease: false

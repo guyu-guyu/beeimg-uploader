@@ -1,7 +1,7 @@
 {
   "id": "beeimg-uploader",
   "name": "BeeImg 蜜蜂图床上传",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.4.0",
   "description": "在 Obsidian 中粘贴或拖拽图片时，自动上传到蜜蜂图床，并将文档中的图片链接替换为图床链接。",
   "author": "guyu",

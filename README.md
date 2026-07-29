@@ -16,12 +16,12 @@
 
 ### 方式一：手动安装（当前唯一方式）
 
-1. 把以下三个文件复制到你的 vault 下 `.obsidian/plugins/beeimg-uploader/` 目录：
-   - `manifest.json`
-   - `main.js`
-   - `styles.css`
-2. 打开 Obsidian → 设置 → 第三方插件 → 关闭安全模式
-3. 在已安装插件列表中找到「BeeImg 蜜蜂图床上传」并启用
+1. 从 [Releases](https://github.com/guyu-guyu/beeimg-uploader/releases) 下载最新版的 `beeimg-uploader-x.y.z.zip`
+2. 解压得到 `manifest.json`、`main.js`、`styles.css` 三个文件
+3. 在你的 vault 中创建目录 `.obsidian/plugins/beeimg-uploader/`
+4. 把三个文件放入该目录
+5. 打开 Obsidian → 设置 → 第三方插件 → 关闭安全模式
+6. 在已安装插件列表中找到「BeeImg 蜜蜂图床上传」并启用
 
 ### 从源码构建
 
