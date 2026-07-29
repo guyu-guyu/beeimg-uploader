@@ -60,11 +60,18 @@ jobs:
 
             ## 安装
 
+            ### 方式一：手动安装（zip）
+
             1. 下载下方的 `beeimg-uploader-${{ steps.manifest.outputs.version }}.zip`
             2. 解压得到 `main.js`、`manifest.json`、`styles.css` 三个文件
             3. 在你的 Obsidian vault 中创建目录 `.obsidian/plugins/beeimg-uploader/`
             4. 把三个文件放入该目录
             5. Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 启用「BeeImg 蜜蜂图床上传」
+
+            ### 方式二：通过 BRAT 等工具安装
+
+            下方同时提供了 `main.js`、`manifest.json`、`styles.css` 三个单独文件，
+            可被 Obsidian 插件管理器（如 [BRAT](https://github.com/TfTHacker/obsidian42-brat)）直接识别。
 
             ## 配置
 
@@ -75,5 +82,8 @@ jobs:
             见 [DEV_NOTES](https://github.com/${{ github.repository }}/blob/main/DEV_NOTES.md)
           files: |
             ${{ env.zip_name }}
+            main.js
+            manifest.json
+            styles.css
           draft: false
           prerelease: false

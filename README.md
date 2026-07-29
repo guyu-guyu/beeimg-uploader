@@ -14,7 +14,7 @@
 
 ## 安装
 
-### 方式一：手动安装（当前唯一方式）
+### 方式一：手动安装
 
 1. 从 [Releases](https://github.com/guyu-guyu/beeimg-uploader/releases) 下载最新版的 `beeimg-uploader-x.y.z.zip`
 2. 解压得到 `manifest.json`、`main.js`、`styles.css` 三个文件
@@ -22,6 +22,14 @@
 4. 把三个文件放入该目录
 5. 打开 Obsidian → 设置 → 第三方插件 → 关闭安全模式
 6. 在已安装插件列表中找到「BeeImg 蜜蜂图床上传」并启用
+
+### 方式二：通过 BRAT 安装
+
+Releases 里同时附带了 `main.js`、`manifest.json`、`styles.css` 三个单独文件，可被 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 等 Obsidian 插件管理器直接识别：
+
+1. 安装 BRAT 插件
+2. BRAT → Add Beta plugin → 填入 `https://github.com/guyu-guyu/beeimg-uploader`
+3. BRAT 会自动拉取最新 Release 的三个文件并安装
 
 ### 从源码构建
 
