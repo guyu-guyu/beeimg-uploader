@@ -1,0 +1,39 @@
+name: CI
+
+# 主干（main）收到提交或 PR 时运行类型检查与构建验证
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Type-check & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (tsc)
+        run: npx tsc -noEmit -skipLibCheck
+
+      - name: Build (esbuild)
+        run: npm run build
+
+      - name: Verify build artifact
+        run: |
+          test -f main.js || { echo "main.js not produced"; exit 1; }
+          echo "main.js size: $(stat -c%s main.js) bytes"

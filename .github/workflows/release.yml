@@ -1,0 +1,73 @@
+name: Release
+
+# 推送 tag（如 v1.0.0）时自动构建插件并发布 GitHub Release
+# 同时把 main.js / manifest.json / styles.css 作为 release assets 上传，
+# 用户可直接下载这三个文件放入 .obsidian/plugins/beeimg-uploader/ 安装
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check & Build
+        run: npm run build
+
+      - name: Verify build artifacts
+        run: |
+          for f in main.js manifest.json styles.css; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done
+
+      - name: Read version from manifest
+        id: manifest
+        run: |
+          version=$(jq -r .version manifest.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Manifest version: $version"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body: |
+            # BeeImg 蜜蜂图床上传 ${{ github.ref_name }}
+
+            ## 安装
+
+            1. 下载下方三个文件：`main.js`、`manifest.json`、`styles.css`
+            2. 在你的 Obsidian vault 中创建目录 `.obsidian/plugins/beeimg-uploader/`
+            3. 把三个文件放入该目录
+            4. Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 启用「BeeImg 蜜蜂图床上传」
+
+            ## 配置
+
+            见 [README](https://github.com/${{ github.repository }}/blob/main/README.md)
+
+            ## 变更
+
+            见 [DEV_NOTES](https://github.com/${{ github.repository }}/blob/main/DEV_NOTES.md)
+          files: |
+            main.js
+            manifest.json
+            styles.css
+          draft: false
+          prerelease: false
