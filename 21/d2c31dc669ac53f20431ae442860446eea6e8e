@@ -1,0 +1,31 @@
+DEV_NOTES.md
+  s_cb5a040048f43b::t_7b11e95322ac99 153,157,159,161,163,165-168,170,196
+README.md
+  s_cb5a040048f43b::t_e0d38180f161cc 13-14,56-59,82,94-95
+main.ts
+  s_cb5a040048f43b::t_b52690f5abc496 48-50,168-173,279,285,329-330,332-334,336-363,467-470,474,476-478,806-833,836-845,847-871
+manifest.json
+  s_cb5a040048f43b::t_2609774e85ba0c 4
+package-lock.json
+  s_cb5a040048f43b::t_7114bae697ac82 3,9
+package.json
+  s_cb5a040048f43b::t_00dac628729ff7 3
+versions.json
+  s_cb5a040048f43b::t_f6b1c27e668fc5 4-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "21d2c31dc669ac53f20431ae442860446eea6e8e",
+  "prompts": {},
+  "sessions": {
+    "s_cb5a040048f43b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb6da-ed7f-7a02-999b-ecc0f1bcfd98",
+        "model": "unknown"
+      },
+      "human_author": "leijieliu <leijieliu@tencent.com>"
+    }
+  }
+}
