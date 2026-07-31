@@ -1,0 +1,47 @@
+.gitignore
+  s_cb5a040048f43b::t_c37fbf1f8c57b2 4
+README.md
+  s_cb5a040048f43b::t_d49c64569338c5 14-16,79-92,113-118
+docs/IMAGE_MANAGEMENT_DESIGN.md
+  s_cb5a040048f43b::t_c1313a4b8fed58 3,5,43,48-49,56,60-62,65,69,71,137-138,206,218,224,228,265-268,272-273,281,293-294,297,345,352,357,360,451,457
+image-manager.ts
+  s_cb5a040048f43b::t_d6debe61df8a58 1-650
+image-usage-index.ts
+  s_cb5a040048f43b::t_0f7cda2776fc9d 1-110
+image-usage.ts
+  s_cb5a040048f43b::t_b7151a5f6396c6 1-218
+image-utils.ts
+  s_cb5a040048f43b::t_8cabbdc0f59b83 1-288
+main.ts
+  s_cb5a040048f43b::t_d875b3bb246878 12-29,193-199,338-340,350-352,358-447,490-540,545-562,612,617-632,671-674,694-705
+styles.css
+  s_cb5a040048f43b::t_c735f94241865c 2-459
+test.config.mjs
+  s_cb5a040048f43b::t_ac5de4c07e13c9 1-23
+tests/image-usage.test.ts
+  s_cb5a040048f43b::t_2b75b04649b314 1-77
+tests/image-utils.test.ts
+  s_cb5a040048f43b::t_30fc64f2688c12 1-245
+tests/run.ts
+  s_cb5a040048f43b::t_246eaff3e9aeec 1-5
+tests/test-harness.ts
+  s_cb5a040048f43b::t_0b5505e43f2aab 1-33
+tsconfig.json
+  s_cb5a040048f43b::t_5f58ea82bee521 17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "64b8836ae5073395a8d5991ab6ce1d22d55f6a95",
+  "prompts": {},
+  "sessions": {
+    "s_cb5a040048f43b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb6da-ed7f-7a02-999b-ecc0f1bcfd98",
+        "model": "unknown"
+      },
+      "human_author": "leijieliu <leijieliu@tencent.com>"
+    }
+  }
+}
