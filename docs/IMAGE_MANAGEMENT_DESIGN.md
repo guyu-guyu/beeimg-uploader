@@ -1,8 +1,8 @@
 # 图床图片管理功能设计
 
-状态：Proposed
+状态：Implemented（待 Obsidian 真实账号集成验证）
 
-建议目标版本：1.2.0
+目标版本：2.0.0
 
 最后更新：2026-07-31
 
@@ -40,34 +40,35 @@
 
 ## 4. API 选择
 
-### 4.1 首期使用旧版接口
+### 4.1 v1 元数据与 v2 相册关系组合
 
 | 能力 | 请求 | 用途 |
 |---|---|---|
 | 图片列表 | `GET /api/v1/images` | 分页、搜索、筛选并取得预览信息 |
-| 删除图片 | `DELETE /api/v1/images/{key}` | 按图片 Key 永久删除单张图片 |
+| 相册图片 | `GET /api/v2/user/photos` | 按相册取得图片 ID |
+| 删除图片 | `DELETE /api/v2/user/photos` | 以 JSON 图片 ID 数组永久删除图片 |
 | 相册列表 | `GET /api/v1/albums` | 填充相册筛选选项 |
 
 列表接口支持以下查询参数：
 
 | 参数 | 取值 | 插件行为 |
 |---|---|---|
-| `page` | 正整数 | 当前页码 |
+| `page` | 正整数 | 客户端遍历全部远端分页 |
 | `q` | 字符串 | 名称关键字，输入停止 300 ms 后查询 |
-| `order` | `newest`、`earliest`、`utmost`、`least` | 默认 `newest` |
 | `permission` | `public`、`private` | 未选择时省略 |
-| `album_id` | 正整数 | 未选择相册时省略 |
 
-选择旧版接口的原因：
+v1 的 `album_id` 在生产环境会触发 HTTP 500，`order` 参数也可能被忽略。插件不再向 v1 发送这两个参数：选择相册时通过 v2 的 `album_id` 获取成员 ID，并与 v1 的 `key` 匹配；最新、最早、最大、最小均在完整结果上本地排序后分页。
+
+保留旧版列表和删除接口的原因：
 
 1. 当前插件已经使用同一 `/api/v1` 基地址和 Bearer Token。
-2. 列表响应直接提供删除所需的 `key`、缩略图和原图链接。
+2. 列表响应直接提供缩略图、原图链接和文件大小。
 3. 不要求现有用户重新创建带新版细粒度权限的 Token。
 4. 改动集中在新增客户端方法和图库视图，不影响现有上传链路。
 
-### 4.2 暂缓新版接口
+### 4.2 新版接口的使用边界
 
-新版接口使用 `/api/v2/user/photos`，提供图片详情、标签以及按 ID 数组批量删除，但需要区分 `user:photo:read` 和 `user:photo:write` 权限。后续迁移时必须新增独立的 v2 基地址、Token 能力检测和 v1/v2 标识转换，不能把图片 Key 当作图片 ID 使用。
+新版接口使用 `/api/v2/user/photos` 读取相册成员关系和稳定图片 ID，并执行删除。v1 `key` 不直接作为 v2 ID：插件按规范化原图 URL、其次按 `pathname` 映射两套响应；映射失败的旧版残留记录不进入管理列表，避免误删。删除响应后重新读取 v2 列表复核，确认目标 ID 不存在后才能向用户提示成功。
 
 ### 4.3 文档与实际行为差异
 
@@ -132,6 +133,8 @@ Accept: application/json
 - 从预览中删除成功后关闭弹窗，并刷新或更新图库页。
 
 优先使用原图链接作为 `<img>` 来源。若私有图片不能直接加载，降级为携带 Bearer Token 请求二进制内容、创建临时 Blob URL，并在弹窗关闭时调用 `URL.revokeObjectURL()`。
+
+Bearer Token 只能发送给与插件 `baseUrl` 完全同源的图片地址。API 返回 CDN 或其他跨域地址时仅允许无凭据请求，防止认证信息泄露给第三方域名。
 
 ## 6. 删除安全设计
 
@@ -200,7 +203,7 @@ API 原始字段只在客户端解析边界出现，视图只消费统一后的 
 
 ```ts
 listImages(query: ImageQuery): Promise<ImagePage>;
-deleteImage(key: number): Promise<void>;
+deleteImage(id: number): Promise<void>;
 ```
 
 删除响应没有 `data` 字段，因此响应信封类型应允许 `data` 缺省，不能为了复用上传响应类型而伪造数据。
@@ -212,17 +215,17 @@ deleteImage(key: number): Promise<void>;
 引用统计严格遵循 [CONTEXT.md](../CONTEXT.md) 的定义：
 
 - 只统计当前仓库中的 Markdown 文件，关闭的笔记也包含在内。
-- 只统计 Obsidian 元数据缓存识别出的图片嵌入，不统计普通 Markdown 链接或纯文本 URL。
+- 统计 Markdown 图片语法和原始 HTML `<img src>`，不统计普通 Markdown 链接或纯文本 URL。
 - 同一笔记嵌入同一图片 3 次，引用次数为 3、引用笔记数为 1。
 - 两篇笔记分别嵌入一次，引用次数为 2、引用笔记数为 2。
 - 缩略图链接不代表笔记正在使用图片，只使用原图链接进行匹配。
 - 图片删除后引用仍保留在笔记中，统计不会自动变为 0；图库刷新后该图片不再出现在远端列表。
 
-首期不统计 Canvas、PDF、附件元数据和普通 HTML 超链接。原始 HTML `<img>` 是否进入计数取决于 Obsidian 是否把它暴露为 `CachedMetadata.embeds`，实施前必须验证并在 README 中说明最终支持范围。
+不统计 Canvas、PDF、附件元数据和普通 HTML 超链接。围栏代码块、行内代码、HTML 注释和转义后的图片语法不会计数。
 
 ### 8.2 URL 匹配
 
-图库返回的 `links.url` 与 `EmbedCache.link` 在比较前执行相同的规范化：
+图库返回的 `links.url` 与从 Markdown 原文提取的图片地址在比较前执行相同的规范化：
 
 1. 仅接受 `http:` 和 `https:` URL。
 2. 使用标准 `URL` API 解析并生成规范地址。
@@ -259,25 +262,23 @@ interface FileImageReferences {
 
 索引在用户首次打开蜜蜂图库时延迟建立：
 
-1. 立即遍历 `vault.getMarkdownFiles()`，读取每个文件的 `metadataCache.getFileCache(file)?.embeds`。
-2. 已有缓存的文件立即加入双向索引；缓存尚不可用的文件进入 pending 集合。
-3. 通过后续 `changed/resolved` 事件补齐 pending 文件，不能假设首次打开图库时 `resolved` 尚未触发。
-4. 规范化所有外部图片嵌入并建立双向索引。
-5. 图片列表可以先显示；索引建立期间引用数字显示加载状态，完成后局部更新当前卡片。
+1. 遍历 `vault.getMarkdownFiles()`，通过 `vault.cachedRead(file)` 异步读取原文。
+2. 提取渲染态的 Markdown 和 HTML 图片地址，规范化后建立双向索引。
+3. 使用文件修订号避免初始异步读取覆盖同时发生的粘贴或编辑事件。
+4. 图片列表可以先显示；索引建立期间引用数字显示加载状态，完成后更新当前卡片。
 
 初始建立后监听：
 
-- `metadataCache.changed`：撤销该文件旧贡献并从新缓存重新加入。
-- `metadataCache.deleted`：移除被删除文件的贡献和 pending 状态。
+- `metadataCache.changed`：直接解析事件携带的最新 Markdown 原文并替换该文件贡献。
+- `metadataCache.deleted`：移除被删除文件的贡献。
 - `vault.rename`：迁移文件路径；元数据缓存不会因重命名触发 `changed`。
-- `metadataCache.resolved`：重新检查 pending 文件；pending 清空后标记索引就绪。
 
 插件卸载时注销事件。图库视图关闭后索引可以保留到插件卸载，避免同一会话再次打开时全量重建。
 
 ### 8.5 一致性与降级
 
 - 索引状态分为 `idle`、`indexing`、`ready` 和 `error`。
-- 某个文件缓存暂不可用时不把它当作“无引用”，而是等待后续 `changed/resolved` 事件。
+- 某个文件读取失败时保留其他文件统计并将索引标记为部分错误。
 - 索引发生局部错误时保留其他文件的统计，并在图库状态区提示“部分引用可能尚未统计”。
 - 引用次数只能证明当前仓库内的已识别 Markdown 图片嵌入；删除确认不得声称图片在其他仓库或外部系统中未使用。
 - 不把索引写入 `data.json`，避免路径和笔记关系形成过期持久数据。
@@ -289,8 +290,11 @@ interface FileImageReferences {
 ```text
 main.ts                    # 插件生命周期、现有客户端、视图注册和入口
 image-manager.ts           # 领域类型、图库 ItemView、预览和删除确认 Modal
+image-utils.ts             # 图片 API 类型、响应规范化、URL 与展示工具
+image-usage.ts             # 可测试的引用双向计数存储
 image-usage-index.ts       # 当前仓库图片引用索引及增量事件处理
 styles.css                 # 图库、工具栏、网格、预览及响应式样式
+tests/                     # 图片数据层和引用计数单元测试
 ```
 
 `image-manager.ts` 定义视图所需的最小客户端接口，由 `BeeImgClient` 结构化实现，避免反向导入 `main.ts` 造成循环依赖。若后续全面迁移 v2，再把 API 客户端拆成独立文件。
@@ -338,21 +342,22 @@ interface ImageManagerState {
 | 5xx/网络失败 | 保留上一次成功内容，在状态区显示非阻塞错误和重试按钮 |
 | 缩略图加载失败 | 显示固定尺寸占位和文件类型，不影响其他卡片 |
 | 响应结构异常 | 报告“服务端返回格式不兼容”，不渲染部分未知数据 |
-| 元数据缓存未就绪 | 保持引用计数加载状态，等待 `resolved` 后更新 |
+| 初始原文索引未完成 | 保持引用计数加载状态，完成后自动更新 |
 | 部分笔记索引失败 | 显示统计不完整提示，删除确认不得显示“未被使用” |
 
 所有来自 API 的名称和错误内容按纯文本渲染，不使用 `innerHTML`。
 
 ## 12. 性能、隐私与可访问性
 
-- 服务端分页，不一次性拉取全部图片。
+- 为保证相册筛选和全局排序正确，按筛选条件遍历服务端分页；结果缓存 30 秒并在刷新、上传或删除后失效。
 - 缩略图懒加载；卡片使用固定宽高比，防止布局跳动。
 - 搜索防抖并忽略过期响应。
 - 引用索引初次建立复杂度与 Markdown 图片嵌入总数线性相关；笔记变化只重算单个文件。
 - 卡片按规范化原图 URL 常数时间查询引用统计，不为每张远端图片重复扫描仓库。
-- 不把图库响应写入插件持久化数据，只在视图生命周期内保留。
+- 不把图库响应写入插件持久化数据，只在插件会话内短时缓存。
 - 不持久化笔记路径和引用关系。
 - 不记录 Token、原图二进制或完整 API 响应到控制台。
+- Bearer Token 不发送给与图床 `baseUrl` 不同源的缩略图、原图或 CDN 地址。
 - 图标按钮通过 Obsidian `setIcon` 使用内置 Lucide 图标，并设置 `aria-label` 与 tooltip。
 - 所有操作均可通过键盘聚焦；预览和确认弹窗遵守 Obsidian Modal 的焦点管理。
 - 文件名允许换行或省略显示，不能撑破卡片和工具栏。
@@ -443,13 +448,13 @@ interface ImageManagerState {
 3. 现有持久 Token 是否均可调用旧版删除接口，还是存在额外服务端权限限制。
 4. 删除成功响应是否稳定为 HTTP 200 且 `status=true`。
 5. GIF 或超大原图在移动端预览时的内存占用是否需要尺寸限制。
-6. `CachedMetadata.embeds` 是否覆盖外部 Markdown 图片、带标题的图片语法和原始 HTML `<img>`。
-7. 元数据缓存尚未完成初始解析时，`resolved` 事件与图库首次打开的顺序。
+6. 真实 Vault 中粘贴、撤销和外部编辑后 `metadataCache.changed` 的触发时序。
 
 ## 17. 参考资料
 
 - [蜜蜂图床 API 索引](https://beeimg.apifox.cn/llms.txt)
 - [旧版图片列表](https://beeimg.apifox.cn/450605924e0.md)
+- [新版图片列表](https://beeimg.apifox.cn/450605962e0.md)
 - [旧版删除图片](https://beeimg.apifox.cn/450605925e0.md)
 - [新版图库列表](https://beeimg.apifox.cn/450605962e0.md)
 - [新版图片详情](https://beeimg.apifox.cn/450605963e0.md)

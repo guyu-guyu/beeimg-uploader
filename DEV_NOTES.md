@@ -2,19 +2,28 @@
 
 记录蜜蜂图床 Obsidian 插件开发过程中的技术细节和踩过的坑，供后续维护者和二次开发者参考。
 
+图库管理 2.0.0 的完整数据流、API 兼容决策、引用索引和删除一致性说明见 [docs/IMAGE_MANAGEMENT_IMPLEMENTATION.md](docs/IMAGE_MANAGEMENT_IMPLEMENTATION.md)。
+
 ## 项目结构
 
 ```
 obsidian-beeimg-uploader/
 ├── manifest.json          # Obsidian 插件清单（id/name/version/minAppVersion）
-├── main.ts                # 唯一源码文件（约 800 行）
+├── main.ts                # 插件生命周期、上传与 API 客户端
+├── image-manager.ts       # 图库视图、预览与删除确认
+├── image-utils.ts         # 图片 API 类型、响应规范化和 URL 工具
+├── image-usage.ts         # 可测试的图片引用双向计数存储
+├── image-usage-index.ts   # Obsidian 元数据缓存事件适配
+├── tests/                 # 纯数据层与引用索引单元测试
 ├── main.js                # esbuild 打包产物（运行时加载）
-├── styles.css             # 样式（当前为空占位）
+├── styles.css             # 图库、预览和删除确认样式
 ├── esbuild.config.mjs     # esbuild 构建配置
+├── test.config.mjs        # esbuild 测试打包与 Node 测试入口
 ├── tsconfig.json          # TypeScript 配置
 ├── package.json           # npm 依赖与脚本
 ├── versions.json          # 版本兼容性映射
 ├── README.md              # 用户文档
+├── docs/                  # 设计文档与图库实施维护指南
 └── DEV_NOTES.md           # 本文
 ```
 
@@ -22,18 +31,19 @@ obsidian-beeimg-uploader/
 
 - **TypeScript → JavaScript**：用 esbuild（非 tsc）打包，目标 `es2018`，CJS 格式
 - **外部依赖**：`obsidian`、`electron`、`@codemirror/*`、`@lezer/*` 都标记为 external，由 Obsidian 运行时提供
-- **构建命令**：`npm run build` = `tsc -noEmit -skipLibCheck && node esbuild.config.mjs production`
-  - 先用 tsc 做类型检查（不产 out 文件）
-  - 再用 esbuild 打包产出 `main.js`
+- **构建命令**：`npm run build` = 单元测试 + TypeScript 类型检查 + esbuild 生产打包
+  - 先用 `test.config.mjs` 打包并运行纯数据层测试
+  - 再用 tsc 做类型检查（不产 out 文件）
+  - 最后用 esbuild 打包产出 `main.js`
 - **开发模式**：`npm run dev` 启用 esbuild watch，配合 Obsidian 的热重载
 
 ## 架构分层
 
-`main.ts` 单文件三段式：
+1. **工具与领域层**：`image-utils.ts`、`image-usage.ts`
+2. **Obsidian 适配层**：`image-usage-index.ts`、`image-manager.ts`
+3. **插件与 API 客户端**：`main.ts`
 
-1. **工具函数**（行 60-150）：`buildMultipart`、`extFromMime`、`timestampName`
-2. **API 客户端 `BeeImgClient`**（行 150-360）：封装所有 HTTP 调用
-3. **主插件 `BeeImgPlugin` + 设置面板 `BeeImgSettingTab`**（行 360+）：事件处理、编辑器操作、UI
+图库 UI 通过最小 `ImageManagerClient` 接口依赖 API 客户端，避免 `image-manager.ts` 反向导入 `main.ts`。远端图片数据与当前 Vault 引用统计保持独立。
 
 ### 为什么手动构造 multipart/form-data？
 
@@ -194,6 +204,9 @@ if (this.settings.albumId > 0) fields.album_id = String(this.settings.albumId);
 | 用户资料 | GET | `/api/v1/profile` | Bearer | 验证 token |
 | 相册列表 | GET | `/api/v1/albums` | Bearer | 查 album_id |
 | 上传图片 | POST | `/api/v1/upload` | Bearer | multipart：file, strategy_id=5, permission, album_id(可选) |
+| 图片列表 | GET | `/api/v1/images` | Bearer | 获取完整元数据、搜索和公开状态筛选 |
+| 相册图片 | GET | `/api/v2/user/photos` | Bearer | 按 album_id 查询相册成员 ID |
+| 删除图片 | DELETE | `/api/v2/user/photos` | Bearer | JSON 图片 ID 数组；删除后重新查询列表确认结果 |
 
 **鉴权头**：`Authorization: Bearer {token}`，token 格式 `数字|随机串`（如 `5|ll0yN65...`）
 
@@ -214,6 +227,28 @@ if (this.settings.albumId > 0) fields.album_id = String(this.settings.albumId);
 ```
 
 注意取 `data.links.url`（旧版格式），不是 `data.public_url`（新版格式，蜜蜂图床不返回）。
+
+---
+
+## 图库管理与引用索引
+
+2.0.0 增加独立 `ItemView` 类型 `beeimg-image-manager`，通过功能区图标或命令面板打开。旧版列表接口的 `album_id` 在生产环境会触发 HTTP 500，`order` 也可能被忽略，因此客户端遍历 v1 分页取得完整元数据，使用 v2 接口取得相册成员 ID，再在本地完成相册筛选、四种排序和分页。完整结果按筛选条件缓存 30 秒；手动刷新、上传和删除会立即清除缓存。搜索输入防抖 300 ms，并用请求序号忽略过期响应。
+
+图片引用统计直接解析 Markdown 原文，避免外部 HTTP 图片未进入 `CachedMetadata.embeds` 时始终显示 0：
+
+- `ImageUsageStore` 维护 `file -> URL/count` 与 `URL -> file/count` 两个方向
+- 支持 Markdown 图片语法和 HTML `<img src>`，排除普通链接、代码和注释
+- 同一笔记重复嵌入分别计数，引用笔记数按文件去重
+- 初次索引通过 `vault.cachedRead` 读取全部 Markdown；`metadataCache.changed/deleted` 增量更新内容变化
+- `vault.rename` 单独迁移路径，因为重命名不会触发 metadata `changed`
+- URL 使用标准 `URL` API 规范化，忽略 fragment、保留 query
+- 索引只存在于插件会话内，不写入 `data.json`
+
+删除始终经过确认 Modal。只有服务端成功后才刷新图库；确认框显示引用次数和最多 5 个受影响笔记，且明确说明其他 Vault 与外部系统不在统计范围内。
+
+删除不能直接把 v1 `key` 当成 v2 ID。列表加载时按规范化原图 URL、其次按 `pathname` 将 v1 图片与 v2 图片身份映射；无法确认 v2 身份的旧版残留记录不进入管理列表。`DELETE /api/v2/user/photos` 返回后重新遍历 v2 图片列表，只有目标 ID 已消失时才向用户提示删除成功。
+
+私有图片直接加载失败时可以通过 `requestUrl` 获取二进制并创建临时 Blob URL，但只有图片 URL 与配置的 `baseUrl` 完全同源时才附带 Bearer Token。跨域 CDN 地址不得携带认证头。
 
 ---
 

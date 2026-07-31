@@ -9,6 +9,24 @@ import {
     TFile,
     requestUrl,
 } from "obsidian";
+import {
+    ImagePage,
+    ImageQuery,
+    V2ImageIdentity,
+    attachV2ImageIdentities,
+    buildImageListUrl,
+    buildV2ImageListUrl,
+    isSameOrigin,
+    normalizeImageUrl,
+    parseImagePage,
+    parseV2ImageIdentityPage,
+    sortAndPaginateImages,
+} from "./image-utils";
+import {
+    BeeImgImageManagerView,
+    IMAGE_MANAGER_VIEW_TYPE,
+} from "./image-manager";
+import { ImageUsageIndex } from "./image-usage-index";
 
 // ============================ 类型定义 ============================
 
@@ -172,6 +190,13 @@ interface Album {
 }
 
 class BeeImgClient {
+    private imageListCache: {
+        key: string;
+        items: ImagePage["items"];
+        perPage: number;
+        loadedAt: number;
+    } | null = null;
+
     constructor(private settings: BeeImgSettings) {}
 
     /** 获取有效 token：API Token 模式直接返回；账号密码模式按需登录。 */
@@ -310,7 +335,9 @@ class BeeImgClient {
         };
 
         try {
-            return await tryUpload(token);
+            const link = await tryUpload(token);
+            this.invalidateImageCache();
+            return link;
         } catch (e) {
             const msg = this.extractError(e);
             // 401 且账号密码模式：重新登录后重试一次
@@ -320,9 +347,101 @@ class BeeImgClient {
             ) {
                 this.invalidateToken();
                 const newToken = await this.login();
-                return await tryUpload(newToken);
+                const link = await tryUpload(newToken);
+                this.invalidateImageCache();
+                return link;
             }
             throw new Error(msg);
+        }
+    }
+
+    /** 查询当前账号的图片列表。 */
+    async listImages(query: ImageQuery): Promise<ImagePage> {
+        const cacheKey = JSON.stringify({
+            q: query.q?.trim() || "",
+            permission: query.permission ?? "",
+            albumId: query.albumId ?? 0,
+        });
+        try {
+            let cached = this.imageListCache;
+            if (!cached || cached.key !== cacheKey || Date.now() - cached.loadedAt > 30_000) {
+                const result = await this.withTokenRetry(async (token) => {
+                    const [allImages, identities] = await Promise.all([
+                        this.fetchAllImagePages(token, query),
+                        this.fetchV2ImageIdentities(token),
+                    ]);
+                    const items = attachV2ImageIdentities(
+                        allImages.items,
+                        identities,
+                        query.albumId
+                    );
+                    return { items, perPage: allImages.perPage };
+                });
+                cached = {
+                    key: cacheKey,
+                    items: result.items,
+                    perPage: result.perPage,
+                    loadedAt: Date.now(),
+                };
+                this.imageListCache = cached;
+            }
+            return sortAndPaginateImages(cached.items, query, cached.perPage);
+        } catch (e) {
+            throw new Error(this.extractError(e));
+        }
+    }
+
+    invalidateImageCache(): void {
+        this.imageListCache = null;
+    }
+
+    /** 永久删除指定图片；图片已不存在时视为状态已同步。 */
+    async deleteImage(id: number): Promise<void> {
+        try {
+            await this.withTokenRetry(async (token) => {
+                try {
+                    await requestUrl({
+                        url: `${this.apiV2Base()}/user/photos`,
+                        method: "DELETE",
+                        headers: {
+                            ...this.authHeaders(token),
+                            Accept: "application/json",
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify([id]),
+                    });
+                } catch (e) {
+                    const httpError = e as { status?: number };
+                    if (httpError?.status === 404) return;
+                    throw e;
+                }
+                await this.verifyImageDeleted(token, id);
+            });
+            this.invalidateImageCache();
+        } catch (e) {
+            throw new Error(this.extractError(e));
+        }
+    }
+
+    /** 获取需要鉴权的图片二进制，用于私有图片预览降级。 */
+    async fetchImage(url: string): Promise<ArrayBuffer> {
+        try {
+            const safeUrl = normalizeImageUrl(url);
+            if (!safeUrl) throw new Error("图片预览地址不是有效的 HTTP(S) URL。");
+            if (!isSameOrigin(safeUrl, this.settings.baseUrl)) {
+                const resp = await requestUrl({ url: safeUrl, method: "GET" });
+                return resp.arrayBuffer;
+            }
+            return await this.withTokenRetry(async (token) => {
+                const resp = await requestUrl({
+                    url: safeUrl,
+                    method: "GET",
+                    headers: this.authHeaders(token),
+                });
+                return resp.arrayBuffer;
+            });
+        } catch (e) {
+            throw new Error(this.extractError(e));
         }
     }
 
@@ -368,8 +487,77 @@ class BeeImgClient {
         return `${this.settings.baseUrl.replace(/\/+$/, "")}/api/v1`;
     }
 
+    private apiV2Base(): string {
+        return `${this.settings.baseUrl.replace(/\/+$/, "")}/api/v2`;
+    }
+
+    private async fetchAllImagePages(
+        token: string,
+        query: ImageQuery
+    ): Promise<{ items: ImagePage["items"]; perPage: number }> {
+        const fetchPage = async (page: number): Promise<ImagePage> => {
+            const resp = await requestUrl({
+                url: buildImageListUrl(this.apiBase(), { ...query, page }),
+                method: "GET",
+                headers: { ...this.authHeaders(token), Accept: "application/json" },
+            });
+            return parseImagePage(this.parseJson(resp));
+        };
+
+        const first = await fetchPage(1);
+        const images = new Map(first.items.map((image) => [image.key, image]));
+        for (let page = 2; page <= first.lastPage; page++) {
+            const next = await fetchPage(page);
+            for (const image of next.items) images.set(image.key, image);
+        }
+        return { items: Array.from(images.values()), perPage: first.perPage };
+    }
+
+    private async fetchV2ImageIdentities(token: string): Promise<V2ImageIdentity[]> {
+        const identities = new Map<number, V2ImageIdentity>();
+        let page = 1;
+        let lastPage = 1;
+        do {
+            const resp = await requestUrl({
+                url: buildV2ImageListUrl(this.apiV2Base(), page),
+                method: "GET",
+                headers: { ...this.authHeaders(token), Accept: "application/json" },
+            });
+            const result = parseV2ImageIdentityPage(this.parseJson(resp));
+            for (const identity of result.items) identities.set(identity.id, identity);
+            lastPage = result.lastPage;
+            page++;
+        } while (page <= lastPage);
+        return Array.from(identities.values());
+    }
+
+    private async verifyImageDeleted(token: string, id: number): Promise<void> {
+        const remaining = await this.fetchV2ImageIdentities(token);
+        if (remaining.some((image) => image.id === id)) {
+            throw new Error("服务器已响应删除请求，但图片仍然存在，请稍后重试。");
+        }
+    }
+
     private authHeaders(token: string): Record<string, string> {
         return { Authorization: `Bearer ${token}` };
+    }
+
+    private async withTokenRetry<T>(
+        operation: (token: string) => Promise<T>
+    ): Promise<T> {
+        const token = await this.ensureToken();
+        try {
+            return await operation(token);
+        } catch (e) {
+            const any = e as { status?: number; message?: string };
+            const unauthorized =
+                any?.status === 401 || /401|unauthor|认证|token/i.test(any?.message || "");
+            if (this.settings.authMode !== "password" || !unauthorized) throw e;
+
+            this.invalidateToken();
+            const newToken = await this.login();
+            return await operation(newToken);
+        }
     }
 
     /**
@@ -421,10 +609,27 @@ class BeeImgClient {
 export default class BeeImgPlugin extends Plugin {
     settings!: BeeImgSettings;
     client!: BeeImgClient;
+    usageIndex!: ImageUsageIndex;
 
     async onload() {
         await this.loadSettings();
         this.client = new BeeImgClient(this.settings);
+        this.usageIndex = this.addChild(new ImageUsageIndex(this.app));
+
+        this.registerView(
+            IMAGE_MANAGER_VIEW_TYPE,
+            (leaf) => new BeeImgImageManagerView(leaf, this.client, this.usageIndex)
+        );
+        this.addRibbonIcon("images", "打开蜜蜂图库", () => {
+            void this.activateImageManager();
+        });
+        this.addCommand({
+            id: "open-beeimg-image-manager",
+            name: "打开蜜蜂图库",
+            callback: () => {
+                void this.activateImageManager();
+            },
+        });
 
         // 粘贴上传
         if (this.settings.enablePaste) {
@@ -463,6 +668,10 @@ export default class BeeImgPlugin extends Plugin {
         this.addSettingTab(new BeeImgSettingTab(this.app, this));
     }
 
+    onunload(): void {
+        this.app.workspace.detachLeavesOfType(IMAGE_MANAGER_VIEW_TYPE);
+    }
+
     async loadSettings() {
         const stored = (await this.loadData()) as
             | (Partial<BeeImgSettings> & { storageId?: unknown })
@@ -480,6 +689,18 @@ export default class BeeImgPlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+
+    private async activateImageManager(): Promise<void> {
+        let leaf = this.app.workspace.getLeavesOfType(IMAGE_MANAGER_VIEW_TYPE)[0];
+        if (!leaf) {
+            leaf = this.app.workspace.getLeaf("tab");
+            await leaf.setViewState({
+                type: IMAGE_MANAGER_VIEW_TYPE,
+                active: true,
+            });
+        }
+        await this.app.workspace.revealLeaf(leaf);
     }
 
     // ---------- 事件处理 ----------
