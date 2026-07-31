@@ -150,33 +150,24 @@ const fields: Record<...> = { file, strategy_id, permission };
 if (this.settings.albumId > 0) fields.album_id = String(this.settings.albumId);
 ```
 
-并加「查询相册」按钮调用 `GET /api/v1/albums`，让用户看到合法 ID。
+1.1.0 起设置页改为相册下拉框；打开设置页或展开下拉框时调用 `GET /api/v1/albums`，自动遍历分页，并以相册名称作为选项文字。
 
 ---
 
-### 坑 6：strategy_id 导致"服务异常"（最坑的一个）
+### 坑 6：注册用户的 strategy_id 必须固定为 5
 
-**症状**：上传报「服务异常，请稍后再试」，鉴权通过、相册 ID 也对了。
+**症状**：上传报「服务异常，请稍后再试」，鉴权通过、相册 ID 也正确。
 
-**真相**：蜜蜂图床**只有一个储存策略，ID = 4**（名为 `TEMP`）。插件默认 `storageId = 1`（PicGo 等工具的常见默认值），服务端找不到 ID=1 的策略就抛未捕获异常，返回笼统的"服务异常"。
+**真相**：注册用户应使用储存策略 **ID = 5**。旧版允许用户手填 `storageId`，错误值会触发服务端异常，也给设置增加了不必要的复杂度。
 
-**验证**：
-```bash
-curl -s https://www.beeimg.cn/api/v1/strategies
-# {"status":true,"message":"success","data":{"strategies":[{"id":4,"name":"TEMP"}]}}
-```
+**1.1.0 修复**：
 
-**修复**：
-1. 默认 `storageId` 改为 4
-2. 新增 `listStrategies()` 方法
-3. 设置面板加「查询策略」按钮
-4. 上传 catch 到"服务异常"时自动查策略列表，把可用 ID 拼进错误消息：
-   ```
-   服务异常，请稍后再试
-   提示：可用储存策略：ID 4 (TEMP)。请在插件设置中修正「储存策略 ID」。
-   ```
+1. 从 `BeeImgSettings` 和设置面板删除 `storageId`
+2. 上传时始终发送 `strategy_id=5`
+3. 加载旧配置时删除遗留的 `storageId` 字段并重新保存
+4. 删除不再需要的策略列表查询逻辑
 
-**教训**：笼统的"服务异常"几乎都是字段值非法（违反 DB 约束、外键不存在等），要主动查相关列表接口辅助诊断。**默认值不要照搬其他工具的，要用 API 查实际值**。
+**教训**：当业务身份已经唯一确定储存策略时，应在代码中固定领域规则，不把无效选择暴露为用户设置。
 
 ---
 
@@ -201,9 +192,8 @@ curl -s https://www.beeimg.cn/api/v1/strategies
 | 接口 | 方法 | 路径 | 鉴权 | 用途 |
 |------|------|------|------|------|
 | 用户资料 | GET | `/api/v1/profile` | Bearer | 验证 token |
-| 储存策略列表 | GET | `/api/v1/strategies` | 可选 | 查 strategy_id |
 | 相册列表 | GET | `/api/v1/albums` | Bearer | 查 album_id |
-| 上传图片 | POST | `/api/v1/upload` | Bearer | multipart：file, strategy_id, permission, album_id(可选) |
+| 上传图片 | POST | `/api/v1/upload` | Bearer | multipart：file, strategy_id=5, permission, album_id(可选) |
 
 **鉴权头**：`Authorization: Bearer {token}`，token 格式 `数字|随机串`（如 `5|ll0yN65...`）
 

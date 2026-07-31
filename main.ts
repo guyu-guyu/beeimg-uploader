@@ -19,7 +19,6 @@ interface BeeImgSettings {
     loginType: "username" | "email" | "phone";
     username: string;
     password: string;
-    storageId: number;
     albumId: number;
     isPublic: boolean;
     isRemoveExif: boolean;
@@ -37,7 +36,6 @@ const DEFAULT_SETTINGS: BeeImgSettings = {
     loginType: "username",
     username: "",
     password: "",
-    storageId: 4,
     albumId: 0,
     isPublic: false,
     isRemoveExif: false,
@@ -46,6 +44,9 @@ const DEFAULT_SETTINGS: BeeImgSettings = {
     enableBatchUpload: true,
     cachedToken: "",
 };
+
+// 蜜蜂图床注册用户使用的固定储存策略。
+const REGISTERED_USER_STORAGE_STRATEGY_ID = 5;
 
 // API 响应信封。status 在新版接口为字符串 "success"/"error"，
 // 在旧版接口（/api/v1/upload 等）为布尔 true/false。
@@ -164,6 +165,12 @@ interface UploadResponseDataV1 {
     links: UploadLinks;
 }
 
+interface Album {
+    id: number;
+    name: string;
+    image_num: number;
+}
+
 class BeeImgClient {
     constructor(private settings: BeeImgSettings) {}
 
@@ -269,14 +276,13 @@ class BeeImgClient {
         const token = await this.ensureToken();
 
         const tryUpload = async (tok: string): Promise<string> => {
-            // 动态构建字段：album_id 为 0 时省略该字段，
-            // 因为蜜蜂图床会校验相册是否存在，0 不是合法相册 ID。
+            // album_id 为 0 时省略该字段，因为服务端会严格校验相册是否存在。
             const fields: Record<
                 string,
                 string | { name: string; data: ArrayBuffer; type: string }
             > = {
                 file: { name: filename, data: fileData, type: mimetype },
-                strategy_id: String(this.settings.storageId),
+                strategy_id: String(REGISTERED_USER_STORAGE_STRATEGY_ID),
                 permission: this.settings.isPublic ? "1" : "0",
             };
             if (this.settings.albumId > 0) {
@@ -316,67 +322,45 @@ class BeeImgClient {
                 const newToken = await this.login();
                 return await tryUpload(newToken);
             }
-            // "服务异常"通常是 strategy_id 不存在，附加可用策略列表帮助诊断
-            if (/服务异常|异常/.test(msg)) {
-                try {
-                    const list = await this.listStrategies();
-                    const hint =
-                        list.length > 0
-                            ? `可用储存策略：${list
-                                  .map((s) => `ID ${s.id} (${s.name})`)
-                                  .join("、")}。请在插件设置中修正「储存策略 ID」。`
-                            : "站点未返回任何储存策略。";
-                    throw new Error(`${msg}\n提示：${hint}`);
-                } catch {
-                    /* 查询失败就用原消息 */
-                }
-            }
             throw new Error(msg);
         }
     }
 
-    /** 查询当前用户相册列表，返回 [{id, name}]。用于在设置面板选择合法 album_id。 */
-    async listAlbums(): Promise<{ id: number; name: string; image_num: number }[]> {
+    /** 查询当前用户的全部相册，自动遍历分页结果。 */
+    async listAlbums(): Promise<Album[]> {
         const token = await this.ensureToken();
-        const resp = await requestUrl({
-            url: `${this.apiBase()}/albums`,
-            method: "GET",
-            headers: { ...this.authHeaders(token), Accept: "application/json" },
-        });
-        const env = this.parseJson(resp) as ApiEnvelope<{
-            data: { id: number; name: string; image_num: number }[];
-        }>;
-        const ok = env.status === true || env.status === "success";
-        if (!ok || !env.data?.data) {
-            throw new Error(env.message || "查询相册列表失败。");
-        }
-        return env.data.data;
-    }
+        const albums = new Map<number, Album>();
+        let page = 1;
+        let lastPage = 1;
 
-    /** 查询站点支持的储存策略列表，返回 [{id, name}]。用于确定合法 strategy_id。 */
-    async listStrategies(): Promise<{ id: number; name: string }[]> {
-        // 策略列表接口不需要鉴权也能返回，但带 token 更稳妥
-        let token = "";
-        try {
-            token = await this.ensureToken();
-        } catch {
-            /* ignore */
-        }
-        const headers: Record<string, string> = { Accept: "application/json" };
-        if (token) headers.Authorization = `Bearer ${token}`;
-        const resp = await requestUrl({
-            url: `${this.apiBase()}/strategies`,
-            method: "GET",
-            headers,
-        });
-        const env = this.parseJson(resp) as ApiEnvelope<{
-            strategies: { id: number; name: string }[];
-        }>;
-        const ok = env.status === true || env.status === "success";
-        if (!ok || !env.data?.strategies) {
-            throw new Error(env.message || "查询策略列表失败。");
-        }
-        return env.data.strategies;
+        do {
+            const resp = await requestUrl({
+                url: `${this.apiBase()}/albums?page=${page}`,
+                method: "GET",
+                headers: { ...this.authHeaders(token), Accept: "application/json" },
+            });
+            const env = this.parseJson(resp) as ApiEnvelope<{
+                data: Album[];
+                current_page?: number;
+                last_page?: number;
+            }>;
+            const ok = env.status === true || env.status === "success";
+            if (!ok || !Array.isArray(env.data?.data)) {
+                throw new Error(env.message || "查询相册列表失败。");
+            }
+
+            for (const album of env.data.data) {
+                albums.set(album.id, album);
+            }
+
+            const currentPage = Number(env.data.current_page ?? page);
+            lastPage = Number(env.data.last_page ?? currentPage);
+            if (!Number.isFinite(currentPage) || !Number.isFinite(lastPage)) break;
+            if (currentPage < page) break;
+            page += 1;
+        } while (page <= lastPage);
+
+        return Array.from(albums.values());
     }
 
     /** API 基地址 = 用户配置 baseUrl + /api/v1 */
@@ -480,11 +464,18 @@ export default class BeeImgPlugin extends Plugin {
     }
 
     async loadSettings() {
+        const stored = (await this.loadData()) as
+            | (Partial<BeeImgSettings> & { storageId?: unknown })
+            | null;
+        const { storageId: legacyStorageId, ...currentSettings } = stored ?? {};
         this.settings = Object.assign(
             {},
             DEFAULT_SETTINGS,
-            await this.loadData()
+            currentSettings
         );
+        if (legacyStorageId !== undefined) {
+            await this.saveSettings();
+        }
     }
 
     async saveSettings() {
@@ -812,77 +803,72 @@ class BeeImgSettingTab extends PluginSettingTab {
 
         containerEl.createEl("h3", { text: "上传选项" });
 
-        new Setting(containerEl)
-            .setName("储存策略 ID (strategy_id)")
-            .setDesc("站点支持的储存策略 ID（蜜蜂图床通常为 4）。点击「查询策略」查看可用值。上传报「服务异常」多半是此 ID 填错。")
-            .addText((text) =>
-                text
-                    .setPlaceholder("4")
-                    .setValue(String(this.plugin.settings.storageId))
-                    .onChange(async (v) => {
-                        const n = parseInt(v, 10);
-                        if (!isNaN(n)) {
-                            this.plugin.settings.storageId = n;
-                            await this.plugin.saveSettings();
-                        }
-                    })
-            )
-            .addButton((btn) =>
-                btn.setButtonText("查询策略").onClick(async () => {
-                    btn.setButtonText("查询中…");
-                    btn.setDisabled(true);
-                    try {
-                        const list = await this.plugin.client.listStrategies();
-                        if (list.length === 0) {
-                            new Notice("站点未返回任何储存策略");
-                        } else {
-                            const lines = list.map((s) => `ID ${s.id}  ${s.name}`);
-                            new Notice(`储存策略：\n${lines.join("\n")}\n\n请在上方填入对应 ID`, 10000);
-                        }
-                    } catch (e) {
-                        new Notice(`查询失败：${e instanceof Error ? e.message : String(e)}`);
-                    } finally {
-                        btn.setButtonText("查询策略");
-                        btn.setDisabled(false);
-                    }
-                })
-            );
+        const albumSetting = new Setting(containerEl)
+            .setName("相册")
+            .setDesc("选择图片要上传到的相册；展开下拉框时会自动刷新可用相册。");
 
-        new Setting(containerEl)
-            .setName("相册 ID (album_id)")
-            .setDesc("上传到指定相册。填 0 表示不上传到任何相册（将省略该字段）。点击「查询相册」查看你账号下的合法相册 ID。")
-            .addText((text) =>
-                text
-                    .setPlaceholder("0")
-                    .setValue(String(this.plugin.settings.albumId))
-                    .onChange(async (v) => {
-                        const n = parseInt(v, 10);
-                        if (!isNaN(n)) {
-                            this.plugin.settings.albumId = n;
-                            await this.plugin.saveSettings();
-                        }
-                    })
-            )
-            .addButton((btn) =>
-                btn.setButtonText("查询相册").onClick(async () => {
-                    btn.setButtonText("查询中…");
-                    btn.setDisabled(true);
-                    try {
-                        const list = await this.plugin.client.listAlbums();
-                        if (list.length === 0) {
-                            new Notice("你的账号下没有相册。保持相册 ID 为 0 即可（将省略该字段）。");
-                        } else {
-                            const lines = list.map((a) => `ID ${a.id}  ${a.name}  (${a.image_num} 张)`);
-                            new Notice(`相册列表：\n${lines.join("\n")}\n\n请在上方填入对应 ID`, 10000);
-                        }
-                    } catch (e) {
-                        new Notice(`查询失败：${e instanceof Error ? e.message : String(e)}`);
-                    } finally {
-                        btn.setButtonText("查询相册");
-                        btn.setDisabled(false);
+        albumSetting.addDropdown((dropdown) => {
+            const currentValue = String(this.plugin.settings.albumId);
+            dropdown.addOption("0", "不使用相册");
+            if (this.plugin.settings.albumId > 0) {
+                dropdown.addOption(currentValue, "当前相册（展开后加载名称）");
+            }
+            dropdown.setValue(currentValue).onChange(async (value) => {
+                this.plugin.settings.albumId = Number(value);
+                await this.plugin.saveSettings();
+            });
+
+            let isLoading = false;
+            const refreshAlbums = async (showErrorNotice = true) => {
+                if (isLoading) return;
+                isLoading = true;
+                albumSetting.setDesc("正在查询可用相册…");
+
+                try {
+                    const albums = await this.plugin.client.listAlbums();
+                    const selectedValue = String(this.plugin.settings.albumId);
+                    dropdown.selectEl.replaceChildren();
+                    dropdown.addOption("0", "不使用相册");
+                    for (const album of albums) {
+                        dropdown.addOption(String(album.id), album.name || "未命名相册");
                     }
-                })
-            );
+
+                    if (
+                        this.plugin.settings.albumId > 0 &&
+                        !albums.some((album) => String(album.id) === selectedValue)
+                    ) {
+                        this.plugin.settings.albumId = 0;
+                        await this.plugin.saveSettings();
+                        dropdown.setValue("0");
+                        new Notice("原先选择的相册已不可用，已改为不使用相册。");
+                    } else {
+                        dropdown.setValue(selectedValue);
+                    }
+
+                    albumSetting.setDesc(
+                        albums.length > 0
+                            ? `已加载 ${albums.length} 个相册；再次展开可刷新列表。`
+                            : "当前账号没有可用相册。"
+                    );
+                } catch (e) {
+                    const message = e instanceof Error ? e.message : String(e);
+                    albumSetting.setDesc(`相册列表查询失败：${message}`);
+                    if (showErrorNotice) {
+                        new Notice(`查询相册失败：${message}`);
+                    }
+                } finally {
+                    isLoading = false;
+                }
+            };
+
+            dropdown.selectEl.addEventListener("pointerdown", () => {
+                void refreshAlbums();
+            });
+            dropdown.selectEl.addEventListener("focus", () => {
+                void refreshAlbums();
+            });
+            void refreshAlbums(false);
+        });
 
         new Setting(containerEl)
             .setName("公开图片")
