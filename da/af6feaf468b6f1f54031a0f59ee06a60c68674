@@ -1,0 +1,21 @@
+CONTEXT.md
+  s_cb5a040048f43b::t_41732c79c29b71 1-65
+docs/IMAGE_MANAGEMENT_DESIGN.md
+  s_cb5a040048f43b::t_ab7e9b9d91e549 1-458
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "daaf6feaf468b6f1f54031a0f59ee06a60c68674",
+  "prompts": {},
+  "sessions": {
+    "s_cb5a040048f43b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fb6da-ed7f-7a02-999b-ecc0f1bcfd98",
+        "model": "unknown"
+      },
+      "human_author": "leijieliu <leijieliu@tencent.com>"
+    }
+  }
+}
